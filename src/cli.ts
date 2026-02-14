@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { formatJSON, formatMarkdown } from "./formatter.ts";
-import { fetchOrgRepos, fetchRepoCommits, getAuthToken } from "./github.ts";
+import {
+    fetchCommitPatch,
+    fetchOrgRepos,
+    fetchRepoCommits,
+    getAuthToken,
+} from "./github.ts";
 import type { ChangelogOutput, CliOptions } from "./types.ts";
 
 const VERSION = "0.1.0";
@@ -22,6 +28,8 @@ Options:
   --format, -f <format>   json | markdown [default: markdown]
   --repos, -r <repos>     Comma-separated repo filter
   --output <file>         Write to file instead of stdout
+  --patch                 Download .patch files for each commit
+  --patch-dir <dir>       Directory for patch files [default: ./patches]
   --help, -h              Show help
   --version, -v           Show version`;
 
@@ -40,6 +48,8 @@ function parseCliArgs(): CliOptions {
             format: { type: "string", short: "f" },
             repos: { type: "string", short: "r" },
             output: { type: "string" },
+            patch: { type: "boolean" },
+            "patch-dir": { type: "string" },
             help: { type: "boolean", short: "h" },
             version: { type: "boolean", short: "v" },
         },
@@ -98,6 +108,8 @@ function parseCliArgs(): CliOptions {
         format,
         repos: values.repos?.split(",").map((r) => r.trim()),
         output: values.output,
+        patch: values.patch ?? false,
+        patchDir: values["patch-dir"] ?? "./patches",
     };
 }
 
@@ -150,6 +162,27 @@ async function main() {
     console.error(
         `Done. ${totalCommits} commits across ${result.repos.length} repos.`,
     );
+
+    if (options.patch) {
+        console.error(`Downloading patches to ${options.patchDir}...`);
+        for (const repo of result.repos) {
+            for (const commit of repo.commits) {
+                const repoDir = join(options.patchDir, repo.repo);
+                mkdirSync(repoDir, { recursive: true });
+                const filename = `${commit.date}_${commit.sha.slice(0, 7)}.patch`;
+                const filepath = join(repoDir, filename);
+                console.error(`  ${repo.repo}/${filename}`);
+                const patch = await fetchCommitPatch(
+                    options.org,
+                    repo.repo,
+                    commit.sha,
+                    token,
+                );
+                writeFileSync(filepath, patch, "utf-8");
+            }
+        }
+        console.error("Patches downloaded.");
+    }
 
     const output =
         options.format === "json" ? formatJSON(result) : formatMarkdown(result);

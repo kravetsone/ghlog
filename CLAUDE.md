@@ -5,7 +5,7 @@ CLI tool that fetches commit history from a GitHub organization and outputs stru
 ## Tech Stack
 
 - TypeScript, zero runtime dependencies
-- Node.js built-ins only (`node:util`, `node:child_process`, `node:fs`) + native `fetch`
+- Node.js built-ins only (`node:util`, `node:child_process`, `node:fs`, `node:path`) + native `fetch`
 - Biome for linting/formatting
 - pkgroll for building
 
@@ -25,7 +25,7 @@ bun run lint:fix     # Biome auto-fix
 ```
 src/
   types.ts        -- Shared TypeScript interfaces
-  github.ts       -- GitHub API client (auth, repos, commits, pagination)
+  github.ts       -- GitHub API client (auth, repos, commits, patches, pagination)
   formatter.ts    -- JSON and Markdown output formatters
   cli.ts          -- Entry point: arg parsing, orchestration, output
 ```

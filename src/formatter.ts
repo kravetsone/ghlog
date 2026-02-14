@@ -20,6 +20,13 @@ export function formatMarkdown(data: ChangelogOutput): string {
             lines.push(
                 `- \`${sha}\` ${commit.message} (@${commit.author}, ${commit.date})`,
             );
+            if (commit.description) {
+                lines.push("");
+                for (const line of commit.description.split("\n")) {
+                    lines.push(`  ${line}`);
+                }
+                lines.push("");
+            }
         }
         lines.push("");
     }

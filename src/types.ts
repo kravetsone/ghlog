@@ -5,6 +5,8 @@ export interface CliOptions {
     format: "json" | "markdown";
     repos?: string[];
     output?: string;
+    patch: boolean;
+    patchDir: string;
 }
 
 export interface GitHubRepo {
@@ -30,6 +32,7 @@ export interface GitHubCommit {
 export interface CommitEntry {
     sha: string;
     message: string;
+    description: string;
     author: string;
     date: string;
 }

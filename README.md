@@ -43,6 +43,8 @@ Options:
   --format, -f <format>   json | markdown [default: markdown]
   --repos, -r <repos>     Comma-separated repo filter
   --output <file>         Write to file instead of stdout
+  --patch                 Download .patch files for each commit
+  --patch-dir <dir>       Directory for patch files [default: ./patches]
   --help, -h              Show help
   --version, -v           Show version
 ```
@@ -58,6 +60,12 @@ changelogen --org my-org --since 2026-01-01 -f json -r api,web,docs
 
 # Save to file
 changelogen --org my-org --since 2026-01-01 --output changelog.md
+
+# Download .patch files for all commits
+changelogen --org my-org --since 2026-01-01 --patch
+
+# Download patches to a custom directory
+changelogen --org my-org --since 2026-01-01 --patch --patch-dir ./my-patches
 
 # Pipe to clipboard (macOS)
 changelogen --org my-org --since 2026-01-01 | pbcopy

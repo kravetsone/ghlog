@@ -119,7 +119,55 @@ export async function fetchRepoCommits(
     return commits.map((c) => ({
         sha: c.sha,
         message: c.commit.message.split("\n")[0],
+        description: c.commit.message.split("\n").slice(1).join("\n").trim(),
         author: c.author?.login ?? c.commit.author.name,
         date: c.commit.author.date.split("T")[0],
     }));
+}
+
+export async function fetchCommitPatch(
+    org: string,
+    repo: string,
+    sha: string,
+    token: string,
+): Promise<string> {
+    const url = `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/commits/${sha}`;
+    const response = await fetch(url, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github.patch",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    });
+
+    if (!response.ok) {
+        if (response.status === 401) {
+            throw new Error("GitHub authentication failed. Check your token.");
+        }
+        if (response.status === 403) {
+            const rateLimitRemaining = response.headers.get(
+                "x-ratelimit-remaining",
+            );
+            if (rateLimitRemaining === "0") {
+                const resetTime = response.headers.get("x-ratelimit-reset");
+                const resetDate = resetTime
+                    ? new Date(Number(resetTime) * 1000).toISOString()
+                    : "unknown";
+                throw new Error(
+                    `GitHub API rate limit exceeded. Resets at ${resetDate}.`,
+                );
+            }
+            throw new Error(
+                `GitHub API forbidden (403): ${await response.text()}`,
+            );
+        }
+        if (response.status === 404) {
+            throw new Error(`GitHub resource not found: ${url}`);
+        }
+        throw new Error(
+            `GitHub API error ${response.status}: ${await response.text()}`,
+        );
+    }
+
+    return response.text();
 }
