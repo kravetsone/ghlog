@@ -42,6 +42,10 @@ async function githubFetchAll<T>(url: string, token: string): Promise<T[]> {
         });
 
         if (!response.ok) {
+            if (response.status === 409) {
+                // Empty repository — no data to return
+                return results;
+            }
             if (response.status === 401) {
                 throw new Error(
                     "GitHub authentication failed. Check your token.",
