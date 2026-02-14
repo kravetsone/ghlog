@@ -1,18 +1,18 @@
 {
-    "name": "changelogen",
+    "name": "ghlog",
     "version": "0.1.0",
     "description": "Fetch commit history from a GitHub organization and output structured JSON or LLM-friendly Markdown",
-    "homepage": "https://github.com/kravetsone/changelogen",
+    "homepage": "https://github.com/kravetsone/ghlog",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/kravetsone/changelogen.git"
+        "url": "git+https://github.com/kravetsone/ghlog.git"
     },
     "author": {
         "url": "https://github.com/kravetsone",
         "name": "kravets"
     },
     "bin": {
-        "changelogen": "./dist/cli.js"
+        "ghlog": "./dist/cli.js"
     },
     "type": "module",
     "devDependencies": {
@@ -26,7 +26,8 @@
         "dev": "bun src/cli.ts",
         "lint": "biome check .",
         "lint:fix": "biome check --write .",
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit",
+        "prepublishOnly": "bunx pkgroll"
     },
     "files": ["dist"],
     "license": "MIT"

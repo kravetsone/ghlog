@@ -14,10 +14,10 @@ import type { ChangelogOutput, CliOptions } from "./types.ts";
 
 const VERSION = "0.1.0";
 
-const HELP = `changelogen - Fetch commit history from a GitHub org
+const HELP = `ghlog - Fetch commit history from a GitHub org
 
 Usage:
-  changelogen --org <name> --since <date> [options]
+  ghlog --org <name> --since <date> [options]
 
 Required:
   --org, -o <name>        GitHub organization name
@@ -108,7 +108,7 @@ function parseCliArgs(): CliOptions {
         format,
         repos: values.repos?.split(",").map((r) => r.trim()),
         output: values.output,
-        patch: values.patch ?? false,
+        patch: values.patch ?? !!values["patch-dir"],
         patchDir: values["patch-dir"] ?? "./patches",
     };
 }

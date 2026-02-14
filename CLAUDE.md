@@ -1,4 +1,4 @@
-# changelogen
+# ghlog
 
 CLI tool that fetches commit history from a GitHub organization and outputs structured JSON or LLM-friendly Markdown.
 

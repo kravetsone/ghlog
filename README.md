@@ -1,22 +1,22 @@
-# changelogen
+# ghlog
 
 Fetch commit history from a GitHub organization and output structured JSON or LLM-friendly Markdown. Feed the output to Claude to generate polished changelogs for a multi-repo organization.
 
 ## Installation
 
 ```bash
-npm install -g changelogen
+npm install -g ghlog
 ```
 
 Or run directly:
 
 ```bash
-npx changelogen --org my-org --since 2026-01-01
+npx ghlog --org my-org --since 2026-01-01
 ```
 
 ## Authentication
 
-changelogen needs a GitHub token. It tries these in order:
+ghlog needs a GitHub token. It tries these in order:
 
 1. **GitHub CLI** - if `gh` is installed and authenticated, it uses `gh auth token`
 2. **Environment variable** - set `GITHUB_TOKEN`
@@ -32,7 +32,7 @@ export GITHUB_TOKEN=ghp_...
 ## Usage
 
 ```
-changelogen --org <name> --since <date> [options]
+ghlog --org <name> --since <date> [options]
 
 Required:
   --org, -o <name>        GitHub organization name
@@ -53,22 +53,22 @@ Options:
 
 ```bash
 # Markdown output for an org since Jan 1
-changelogen --org my-org --since 2026-01-01
+ghlog --org my-org --since 2026-01-01
 
 # JSON output for specific repos
-changelogen --org my-org --since 2026-01-01 -f json -r api,web,docs
+ghlog --org my-org --since 2026-01-01 -f json -r api,web,docs
 
 # Save to file
-changelogen --org my-org --since 2026-01-01 --output changelog.md
+ghlog --org my-org --since 2026-01-01 --output changelog.md
 
 # Download .patch files for all commits
-changelogen --org my-org --since 2026-01-01 --patch
+ghlog --org my-org --since 2026-01-01 --patch
 
-# Download patches to a custom directory
-changelogen --org my-org --since 2026-01-01 --patch --patch-dir ./my-patches
+# Download patches to a custom directory (--patch-dir implies --patch)
+ghlog --org my-org --since 2026-01-01 --patch-dir ./my-patches
 
 # Pipe to clipboard (macOS)
-changelogen --org my-org --since 2026-01-01 | pbcopy
+ghlog --org my-org --since 2026-01-01 | pbcopy
 ```
 
 ## Development
