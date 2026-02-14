@@ -1,0 +1,33 @@
+{
+    "name": "changelogen",
+    "version": "0.1.0",
+    "description": "Fetch commit history from a GitHub organization and output structured JSON or LLM-friendly Markdown",
+    "homepage": "https://github.com/kravetsone/changelogen",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/kravetsone/changelogen.git"
+    },
+    "author": {
+        "url": "https://github.com/kravetsone",
+        "name": "kravets"
+    },
+    "bin": {
+        "changelogen": "./dist/cli.js"
+    },
+    "type": "module",
+    "devDependencies": {
+        "@biomejs/biome": "^1.9.4",
+        "@types/node": "^22.0.0",
+        "pkgroll": "^2.6.1",
+        "typescript": "^5.0.0"
+    },
+    "scripts": {
+        "build": "pkgroll",
+        "dev": "bun src/cli.ts",
+        "lint": "biome check .",
+        "lint:fix": "biome check --write .",
+        "typecheck": "tsc --noEmit"
+    },
+    "files": ["dist"],
+    "license": "MIT"
+}
