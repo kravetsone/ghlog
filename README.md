@@ -33,12 +33,17 @@ export GITHUB_TOKEN=ghp_...
 
 ```
 ghlog --org <name> --since <date> [options]
+ghlog --org <name> --since-map <file> [options]
 
 Required:
   --org, -o <name>        GitHub organization name
-  --since, -s <date>      Start date (YYYY-MM-DD)
+
+Required (one of):
+  --since, -s <date>      Start date (YYYY-MM-DD) — global or fallback for new repos
+  --since-map <file>      JSON file {"repo": "sha"} — per-repo start commit SHA
 
 Options:
+  --include-new           Include repos not in --since-map (requires --since)
   --until, -u <date>      End date [default: today]
   --format, -f <format>   json | markdown [default: markdown]
   --repos, -r <repos>     Comma-separated repo filter
@@ -70,6 +75,23 @@ ghlog --org my-org --since 2026-01-01 --patch-dir ./my-patches
 # Pipe to clipboard (macOS)
 ghlog --org my-org --since 2026-01-01 | pbcopy
 ```
+
+## Incremental fetching with `--since-map`
+
+`--since-map` lets you start each repo from a specific commit SHA rather than a date. This is more precise than `--since` (no day-boundary ambiguity) and is the natural way to implement incremental runs — save the last-seen SHA per repo, pass it on the next run.
+
+```bash
+# Create a map of last-seen SHAs
+echo '{"api": "a1b2c3d", "web": "e4f5g6h"}' > since.json
+
+# Fetch only new commits for repos in the map (others are skipped)
+ghlog --org my-org --since-map since.json
+
+# Also include repos not in the map, using --since as a date fallback
+ghlog --org my-org --since-map since.json --include-new --since 2026-01-01
+```
+
+The SHA is resolved to its exact commit timestamp before fetching, so commits are never double-counted or missed at day boundaries.
 
 ## Development
 

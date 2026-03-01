@@ -104,15 +104,51 @@ export async function fetchOrgRepos(
     );
 }
 
+export async function fetchCommitTimestamp(
+    org: string,
+    repo: string,
+    sha: string,
+    token: string,
+): Promise<string> {
+    const url = `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}`;
+    const response = await fetch(url, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    });
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error(
+                `SHA "${sha}" not found in repo "${org}/${repo}". Check your --since-map file.`,
+            );
+        }
+        if (response.status === 401) {
+            throw new Error("GitHub authentication failed. Check your token.");
+        }
+        throw new Error(
+            `GitHub API error ${response.status}: ${await response.text()}`,
+        );
+    }
+
+    const data = (await response.json()) as {
+        commit: { committer: { date: string } };
+    };
+    return data.commit.committer.date;
+}
+
 export async function fetchRepoCommits(
     org: string,
     repo: string,
-    since: string,
+    since: string | undefined,
     until: string,
     token: string,
 ): Promise<CommitEntry[]> {
+    const sinceParam = since ? `&since=${since}` : "";
     const commits = await githubFetchAll<GitHubCommit>(
-        `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/commits?since=${since}&until=${until}&per_page=100`,
+        `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/commits?until=${until}${sinceParam}&per_page=100`,
         token,
     );
 

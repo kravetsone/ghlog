@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { formatJSON, formatMarkdown } from "./formatter.ts";
 import {
     fetchCommitPatch,
+    fetchCommitTimestamp,
     fetchOrgRepos,
     fetchRepoCommits,
     getAuthToken,
@@ -18,12 +19,17 @@ const HELP = `ghlog - Fetch commit history from a GitHub org
 
 Usage:
   ghlog --org <name> --since <date> [options]
+  ghlog --org <name> --since-map <file> [options]
 
 Required:
   --org, -o <name>        GitHub organization name
-  --since, -s <date>      Start date (YYYY-MM-DD)
+
+Required (one of):
+  --since, -s <date>      Start date (YYYY-MM-DD) — global or fallback for new repos
+  --since-map <file>      JSON file {"repo": "sha"} — per-repo start commit SHA
 
 Options:
+  --include-new           Include repos not in --since-map (requires --since)
   --until, -u <date>      End date [default: today]
   --format, -f <format>   json | markdown [default: markdown]
   --repos, -r <repos>     Comma-separated repo filter
@@ -44,6 +50,8 @@ function parseCliArgs(): CliOptions {
         options: {
             org: { type: "string", short: "o" },
             since: { type: "string", short: "s" },
+            "since-map": { type: "string" },
+            "include-new": { type: "boolean" },
             until: { type: "string", short: "u" },
             format: { type: "string", short: "f" },
             repos: { type: "string", short: "r" },
@@ -72,13 +80,45 @@ function parseCliArgs(): CliOptions {
         process.exit(1);
     }
 
-    if (!values.since) {
-        console.error("Error: --since is required.\n");
+    let sinceMap: Record<string, string> | undefined;
+    if (values["since-map"]) {
+        let raw: string;
+        try {
+            raw = readFileSync(values["since-map"], "utf-8");
+        } catch {
+            console.error(
+                `Error: Cannot read --since-map file "${values["since-map"]}"`,
+            );
+            process.exit(1);
+        }
+        try {
+            sinceMap = JSON.parse(raw) as Record<string, string>;
+            if (typeof sinceMap !== "object" || Array.isArray(sinceMap)) {
+                throw new Error("not an object");
+            }
+        } catch {
+            console.error(
+                `Error: --since-map file "${values["since-map"]}" contains invalid JSON (expected {"repo": "sha"})`,
+            );
+            process.exit(1);
+        }
+    }
+
+    if (!values.since && !sinceMap) {
+        console.error("Error: --since or --since-map is required.\n");
         console.error(HELP);
         process.exit(1);
     }
 
-    if (!isValidDate(values.since)) {
+    if (values["include-new"] && !values.since) {
+        console.error(
+            "Error: --include-new requires --since as a date fallback for new repos.\n",
+        );
+        console.error(HELP);
+        process.exit(1);
+    }
+
+    if (values.since && !isValidDate(values.since)) {
         console.error(
             `Error: --since must be a valid date (YYYY-MM-DD), got "${values.since}"`,
         );
@@ -104,6 +144,8 @@ function parseCliArgs(): CliOptions {
     return {
         org: values.org,
         since: values.since,
+        sinceMap,
+        includeNew: values["include-new"] ?? false,
         until,
         format,
         repos: values.repos?.split(",").map((r) => r.trim()),
@@ -136,7 +178,7 @@ async function main() {
 
     const result: ChangelogOutput = {
         org: options.org,
-        since: options.since,
+        since: options.since ?? "commit-map",
         until: options.until,
         generatedAt: new Date().toISOString(),
         repos: [],
@@ -144,11 +186,34 @@ async function main() {
 
     // Fetch commits sequentially to avoid GitHub abuse detection
     for (const repo of repos) {
-        console.error(`  Fetching commits for ${repo.name}...`);
+        let startSince: string | undefined;
+        let sinceLabel: string;
+
+        if (options.sinceMap && repo.name in options.sinceMap) {
+            const sha = options.sinceMap[repo.name];
+            const timestamp = await fetchCommitTimestamp(
+                options.org,
+                repo.name,
+                sha,
+                token,
+            );
+            startSince = timestamp;
+            sinceLabel = sha;
+        } else if (options.sinceMap && !options.includeNew) {
+            // Repo not in map and --include-new not set — skip
+            continue;
+        } else {
+            startSince = options.since;
+            sinceLabel = options.since ?? "beginning";
+        }
+
+        console.error(
+            `  Fetching commits for ${repo.name} (since ${sinceLabel})...`,
+        );
         const commits = await fetchRepoCommits(
             options.org,
             repo.name,
-            options.since,
+            startSince,
             options.until,
             token,
         );

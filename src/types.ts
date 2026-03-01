@@ -1,6 +1,8 @@
 export interface CliOptions {
     org: string;
-    since: string;
+    since?: string;
+    sinceMap?: Record<string, string>;
+    includeNew: boolean;
     until: string;
     format: "json" | "markdown";
     repos?: string[];
