@@ -1,6 +1,6 @@
 {
     "name": "ghlog",
-    "version": "0.2.0",
+    "version": "0.4.0",
     "description": "Fetch commit history from a GitHub organization and output structured JSON or LLM-friendly Markdown",
     "homepage": "https://github.com/kravetsone/ghlog",
     "repository": {

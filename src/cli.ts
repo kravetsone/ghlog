@@ -8,12 +8,14 @@ import {
     fetchCommitPatch,
     fetchCommitTimestamp,
     fetchOrgRepos,
+    fetchPushedCommits,
+    fetchPushTimestamp,
     fetchRepoCommits,
     getAuthToken,
 } from "./github.ts";
-import type { ChangelogOutput, CliOptions } from "./types.ts";
+import type { ChangelogOutput, CliOptions, CommitEntry } from "./types.ts";
 
-const VERSION = "0.1.0";
+const VERSION = "0.4.0";
 
 const HELP = `ghlog - Fetch commit history from a GitHub org
 
@@ -30,7 +32,13 @@ Required (one of):
 
 Options:
   --include-new           Include repos not in --since-map (requires --since)
-  --until, -u <date>      End date [default: today]
+  --until, -u <date>      End date [default: today, inclusive end-of-day]
+  --time-source <src>     commit | push  [default: commit]
+                          push uses the events API (~90 day / 300 event GitHub
+                          window per repo; pushes >20 commits are truncated).
+  --exclude-author <list> Comma-separated authors to drop (e.g.
+                          "dependabot[bot],renovate[bot],github-actions[bot]")
+  --no-forks              Skip fork repos
   --format, -f <format>   json | markdown [default: markdown]
   --repos, -r <repos>     Comma-separated repo filter
   --output <file>         Write to file instead of stdout
@@ -40,9 +48,21 @@ Options:
   --version, -v           Show version`;
 
 function isValidDate(value: string): boolean {
-    return (
-        /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value))
-    );
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) return false;
+    // Reject silent calendar shifts like 2026-02-30 → 2026-03-02
+    return parsed.toISOString().slice(0, 10) === value;
+}
+
+// Convert a date-only YYYY-MM-DD to end-of-day ISO timestamp so GitHub's
+// exclusive `until` filter still includes commits on that calendar day.
+// Pass-through for full ISO timestamps.
+function toInclusiveUntil(value: string): string {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        return `${value}T23:59:59.999Z`;
+    }
+    return value;
 }
 
 function parseCliArgs(): CliOptions {
@@ -58,6 +78,9 @@ function parseCliArgs(): CliOptions {
             output: { type: "string" },
             patch: { type: "boolean" },
             "patch-dir": { type: "string" },
+            "time-source": { type: "string" },
+            "exclude-author": { type: "string" },
+            "no-forks": { type: "boolean" },
             help: { type: "boolean", short: "h" },
             version: { type: "boolean", short: "v" },
         },
@@ -125,10 +148,18 @@ function parseCliArgs(): CliOptions {
         process.exit(1);
     }
 
-    const until = values.until ?? new Date().toISOString().split("T")[0];
+    const untilRaw = values.until ?? new Date().toISOString().split("T")[0];
     if (values.until && !isValidDate(values.until)) {
         console.error(
             `Error: --until must be a valid date (YYYY-MM-DD), got "${values.until}"`,
+        );
+        process.exit(1);
+    }
+    const until = toInclusiveUntil(untilRaw);
+
+    if (values.since && new Date(until) <= new Date(values.since)) {
+        console.error(
+            `Error: --until (${untilRaw}) must be after --since (${values.since}).`,
         );
         process.exit(1);
     }
@@ -141,14 +172,35 @@ function parseCliArgs(): CliOptions {
         process.exit(1);
     }
 
+    const timeSource = (values["time-source"] ?? "commit") as "commit" | "push";
+    if (timeSource !== "commit" && timeSource !== "push") {
+        console.error(
+            `Error: --time-source must be "commit" or "push", got "${values["time-source"]}"`,
+        );
+        process.exit(1);
+    }
+
+    const excludeAuthors = values["exclude-author"]
+        ? new Set(
+              values["exclude-author"]
+                  .split(",")
+                  .map((a) => a.trim())
+                  .filter(Boolean),
+          )
+        : undefined;
+
     return {
         org: values.org,
         since: values.since,
         sinceMap,
         includeNew: values["include-new"] ?? false,
         until,
+        untilDisplay: untilRaw,
+        timeSource,
         format,
         repos: values.repos?.split(",").map((r) => r.trim()),
+        excludeAuthors,
+        noForks: values["no-forks"] ?? false,
         output: values.output,
         patch: values.patch ?? !!values["patch-dir"],
         patchDir: values["patch-dir"] ?? "./patches",
@@ -165,6 +217,10 @@ async function main() {
     // Filter archived and disabled repos
     repos = repos.filter((r) => !r.archived && !r.disabled);
 
+    if (options.noForks) {
+        repos = repos.filter((r) => !r.fork);
+    }
+
     // Apply --repos filter
     if (options.repos) {
         const allowed = new Set(options.repos);
@@ -179,7 +235,7 @@ async function main() {
     const result: ChangelogOutput = {
         org: options.org,
         since: options.since ?? "commit-map",
-        until: options.until,
+        until: options.untilDisplay,
         generatedAt: new Date().toISOString(),
         repos: [],
     };
@@ -191,12 +247,33 @@ async function main() {
 
         if (options.sinceMap && repo.name in options.sinceMap) {
             const sha = options.sinceMap[repo.name];
-            const timestamp = await fetchCommitTimestamp(
-                options.org,
-                repo.name,
-                sha,
-                token,
-            );
+            let timestamp: string | null = null;
+            if (options.timeSource === "push") {
+                timestamp = await fetchPushTimestamp(
+                    options.org,
+                    repo.name,
+                    sha,
+                    token,
+                );
+                if (timestamp === null) {
+                    console.error(
+                        `  Warning: ${repo.name}: SHA ${sha.slice(0, 7)} not found in push events (>~90 days or >20-commit batch). Falling back to committer date.`,
+                    );
+                    timestamp = await fetchCommitTimestamp(
+                        options.org,
+                        repo.name,
+                        sha,
+                        token,
+                    );
+                }
+            } else {
+                timestamp = await fetchCommitTimestamp(
+                    options.org,
+                    repo.name,
+                    sha,
+                    token,
+                );
+            }
             startSince = timestamp;
             sinceLabel = sha;
         } else if (options.sinceMap && !options.includeNew) {
@@ -210,13 +287,29 @@ async function main() {
         console.error(
             `  Fetching commits for ${repo.name} (since ${sinceLabel})...`,
         );
-        const commits = await fetchRepoCommits(
-            options.org,
-            repo.name,
-            startSince,
-            options.until,
-            token,
-        );
+        let commits: CommitEntry[];
+        if (options.timeSource === "push") {
+            commits = await fetchPushedCommits(
+                options.org,
+                repo.name,
+                startSince,
+                options.until,
+                token,
+            );
+        } else {
+            commits = await fetchRepoCommits(
+                options.org,
+                repo.name,
+                startSince,
+                options.until,
+                token,
+            );
+        }
+        if (options.excludeAuthors) {
+            commits = commits.filter(
+                (c) => !options.excludeAuthors?.has(c.author),
+            );
+        }
         result.repos.push({ repo: repo.name, commits });
     }
 

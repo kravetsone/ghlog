@@ -1,5 +1,11 @@
 import { execSync } from "node:child_process";
-import type { CommitEntry, GitHubCommit, GitHubRepo } from "./types.ts";
+import { setTimeout as sleep } from "node:timers/promises";
+import type {
+    CommitEntry,
+    GitHubCommit,
+    GitHubPushEvent,
+    GitHubRepo,
+} from "./types.ts";
 
 const API_BASE = "https://api.github.com";
 
@@ -22,6 +28,49 @@ export function getAuthToken(): string {
     );
 }
 
+class RetryableHttpError extends Error {
+    constructor(
+        public status: number,
+        message: string,
+    ) {
+        super(message);
+    }
+}
+
+async function fetchWithRetry(
+    url: string,
+    init: RequestInit,
+    { retries = 3, baseDelayMs = 1000 } = {},
+): Promise<Response> {
+    let attempt = 0;
+    while (true) {
+        try {
+            const response = await fetch(url, init);
+            if (response.status >= 500 && attempt < retries) {
+                throw new RetryableHttpError(
+                    response.status,
+                    `GitHub API ${response.status}`,
+                );
+            }
+            return response;
+        } catch (err) {
+            const isNetwork = err instanceof TypeError;
+            const isRetryable5xx = err instanceof RetryableHttpError;
+            if ((!isNetwork && !isRetryable5xx) || attempt >= retries) {
+                throw err;
+            }
+            const delay = baseDelayMs * 2 ** attempt;
+            const reason =
+                err instanceof Error ? err.message : "network error";
+            console.error(
+                `  retry ${attempt + 1}/${retries} after ${delay}ms (${reason})`,
+            );
+            await sleep(delay);
+            attempt++;
+        }
+    }
+}
+
 function parseLinkHeader(header: string | null): string | null {
     if (!header) return null;
     const match = header.match(/<([^>]+)>;\s*rel="next"/);
@@ -33,7 +82,7 @@ async function githubFetchAll<T>(url: string, token: string): Promise<T[]> {
     let nextUrl: string | null = url;
 
     while (nextUrl) {
-        const response = await fetch(nextUrl, {
+        const response = await fetchWithRetry(nextUrl, {
             headers: {
                 Authorization: `Bearer ${token}`,
                 Accept: "application/vnd.github+json",
@@ -111,7 +160,7 @@ export async function fetchCommitTimestamp(
     token: string,
 ): Promise<string> {
     const url = `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
         headers: {
             Authorization: `Bearer ${token}`,
             Accept: "application/vnd.github+json",
@@ -146,19 +195,178 @@ export async function fetchRepoCommits(
     until: string,
     token: string,
 ): Promise<CommitEntry[]> {
-    const sinceParam = since ? `&since=${since}` : "";
+    const sinceParam = since ? `&since=${encodeURIComponent(since)}` : "";
     const commits = await githubFetchAll<GitHubCommit>(
-        `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/commits?until=${until}${sinceParam}&per_page=100`,
+        `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/commits?until=${encodeURIComponent(until)}${sinceParam}&per_page=100`,
         token,
     );
 
-    return commits.map((c) => ({
-        sha: c.sha,
-        message: c.commit.message.split("\n")[0],
-        description: c.commit.message.split("\n").slice(1).join("\n").trim(),
-        author: c.author?.login ?? c.commit.author.name,
-        date: c.commit.author.date.split("T")[0],
-    }));
+    return commits.map((c) => {
+        const lines = c.commit.message.split(/\r?\n/);
+        return {
+            sha: c.sha,
+            url: `https://github.com/${org}/${repo}/commit/${c.sha}`,
+            message: lines[0] ?? "",
+            description: lines.slice(1).join("\n").trim(),
+            author: c.author?.login ?? c.commit.author.name,
+            date: c.commit.author.date.split("T")[0],
+        };
+    });
+}
+
+async function fetchRepoPushEvents(
+    org: string,
+    repo: string,
+    token: string,
+): Promise<GitHubPushEvent[]> {
+    return githubFetchAll<GitHubPushEvent>(
+        `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/events?per_page=100`,
+        token,
+    );
+}
+
+async function fetchCompareCommits(
+    org: string,
+    repo: string,
+    base: string,
+    head: string,
+    token: string,
+): Promise<GitHubCommit[]> {
+    const url = `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+    const response = await fetchWithRetry(url, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    });
+    if (!response.ok) {
+        if (response.status === 404) return [];
+        throw new Error(
+            `GitHub compare API ${response.status}: ${await response.text()}`,
+        );
+    }
+    const data = (await response.json()) as { commits?: GitHubCommit[] };
+    return data.commits ?? [];
+}
+
+async function fetchSingleCommit(
+    org: string,
+    repo: string,
+    sha: string,
+    token: string,
+): Promise<GitHubCommit | null> {
+    const url = `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}`;
+    const response = await fetchWithRetry(url, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as GitHubCommit;
+}
+
+interface PushedCommitRaw {
+    sha: string;
+    commit: GitHubCommit["commit"];
+    author: GitHubCommit["author"];
+    pushedAt: string;
+    actorLogin: string;
+}
+
+/**
+ * Walk a repo's PushEvents (events API: last ~90 days / 300 events) and expand
+ * each event's `before...head` range via the Compare API to get full commit
+ * metadata tagged with the push timestamp.
+ */
+async function fetchAllPushedCommits(
+    org: string,
+    repo: string,
+    token: string,
+): Promise<PushedCommitRaw[]> {
+    const events = await fetchRepoPushEvents(org, repo, token);
+    const result: PushedCommitRaw[] = [];
+    const seen = new Set<string>();
+
+    for (const ev of events) {
+        if (ev.type !== "PushEvent") continue;
+        const before = ev.payload.before;
+        const head = ev.payload.head;
+        if (!head) continue;
+
+        let commits: GitHubCommit[];
+        // Repo-creation push uses an all-zero `before` SHA — Compare API can't
+        // diff against it, so fall back to fetching the head commit alone.
+        if (!before || /^0+$/.test(before)) {
+            const single = await fetchSingleCommit(org, repo, head, token);
+            commits = single ? [single] : [];
+        } else {
+            commits = await fetchCompareCommits(org, repo, before, head, token);
+        }
+
+        for (const c of commits) {
+            if (seen.has(c.sha)) continue;
+            seen.add(c.sha);
+            result.push({
+                sha: c.sha,
+                commit: c.commit,
+                author: c.author,
+                pushedAt: ev.created_at,
+                actorLogin: ev.actor?.login ?? "",
+            });
+        }
+    }
+    return result;
+}
+
+/**
+ * Build a commit list using PushEvent timestamps as the time source.
+ * Limited by the GitHub events API window (~90 days / 300 events per repo).
+ * Each PushEvent costs one extra Compare API call to enumerate its commits.
+ */
+export async function fetchPushedCommits(
+    org: string,
+    repo: string,
+    since: string | undefined,
+    until: string,
+    token: string,
+): Promise<CommitEntry[]> {
+    const all = await fetchAllPushedCommits(org, repo, token);
+    const sinceTime = since ? new Date(since).getTime() : 0;
+    const untilTime = new Date(until).getTime();
+    const result: CommitEntry[] = [];
+
+    for (const p of all) {
+        const t = new Date(p.pushedAt).getTime();
+        if (t < sinceTime || t > untilTime) continue;
+        const lines = p.commit.message.split(/\r?\n/);
+        result.push({
+            sha: p.sha,
+            url: `https://github.com/${org}/${repo}/commit/${p.sha}`,
+            message: lines[0] ?? "",
+            description: lines.slice(1).join("\n").trim(),
+            author: p.author?.login ?? p.actorLogin ?? p.commit.author.name,
+            date: p.pushedAt.split("T")[0],
+            pushDate: p.pushedAt,
+        });
+    }
+    return result;
+}
+
+/**
+ * Resolve a SHA to its push event timestamp via events + compare APIs.
+ * Returns null if the SHA is older than ~90 days or otherwise not found.
+ */
+export async function fetchPushTimestamp(
+    org: string,
+    repo: string,
+    sha: string,
+    token: string,
+): Promise<string | null> {
+    const all = await fetchAllPushedCommits(org, repo, token);
+    return all.find((p) => p.sha === sha)?.pushedAt ?? null;
 }
 
 export async function fetchCommitPatch(
@@ -168,7 +376,7 @@ export async function fetchCommitPatch(
     token: string,
 ): Promise<string> {
     const url = `${API_BASE}/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/commits/${sha}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
         headers: {
             Authorization: `Bearer ${token}`,
             Accept: "application/vnd.github.patch",

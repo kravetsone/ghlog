@@ -14,15 +14,18 @@ export function formatMarkdown(data: ChangelogOutput): string {
     for (const repo of data.repos) {
         if (repo.commits.length === 0) continue;
 
-        lines.push(`### ${repo.repo} (${repo.commits.length} commits)`);
+        const repoUrl = `https://github.com/${data.org}/${repo.repo}`;
+        lines.push(
+            `### [${repo.repo}](${repoUrl}) (${repo.commits.length} commits)`,
+        );
         for (const commit of repo.commits) {
             const sha = commit.sha.slice(0, 7);
             lines.push(
-                `- \`${sha}\` ${commit.message} (@${commit.author}, ${commit.date})`,
+                `- [\`${sha}\`](${commit.url}) ${commit.message} (@${commit.author}, ${commit.date})`,
             );
             if (commit.description) {
                 lines.push("");
-                for (const line of commit.description.split("\n")) {
+                for (const line of commit.description.split(/\r?\n/)) {
                     lines.push(`  ${line}`);
                 }
                 lines.push("");
